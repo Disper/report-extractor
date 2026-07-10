@@ -104,6 +104,7 @@ def extract_values_from_text(text, page_numbers=[2, 3]):
         e_value = None
         f_value = None
         pozostale_wydatki_value = None
+        c_wydatki_value = None
         
         # Find "Pozostałe wydatki z salda lokalu" value
         pozostale_label = "Pozostałe wydatki z salda lokalu (np. naprawy, rozliczenia)"
@@ -112,7 +113,7 @@ def extract_values_from_text(text, page_numbers=[2, 3]):
             if pozostale_label in line:
                 pozostale_label_index = i
                 break
-        
+
         if g_label_index >= 0:
             # Find payment section marker
             payment_marker = "Płatności z tyt"
@@ -121,19 +122,19 @@ def extract_values_from_text(text, page_numbers=[2, 3]):
                 if payment_marker in lines[i]:
                     payment_index = i
                     break
-            
+
             # Find all "1 000,00 zł" values after G label and before payment section
             saldo_values = []
             for i in range(g_label_index + 1, payment_index):
                 if "1 000,00 zł" in lines[i]:
                     saldo_values.append(i)
-            
+
             # The last "1 000,00 zł" before payment is G (saldo na koniec miesiąca)
             # The one before that is D (saldo minimalne)
             if len(saldo_values) >= 2:
                 # Second-to-last "1 000,00 zł" is D (saldo minimalne)
                 saldo_minimalne_line = saldo_values[-2]
-                
+
                 # Find all monetary values after saldo minimalne
                 values_after_d = []
                 for i in range(saldo_minimalne_line + 1, payment_index):
@@ -145,32 +146,33 @@ def extract_values_from_text(text, page_numbers=[2, 3]):
                             # Stop after finding E and F (we only need first 2 non-zero values)
                             if len(values_after_d) >= 2:
                                 break
-                
+
                 # E value is the first non-zero value after D
                 if len(values_after_d) >= 1:
                     e_value = values_after_d[0][1]
-                
+
                 # F value is the second non-zero value after D
                 if len(values_after_d) >= 2:
                     f_value = values_after_d[1][1]
-            
-            # Find "Pozostałe wydatki z salda lokalu" value
-            # The values appear in order in the values section (after G label)
-            # Structure: A (1 item) + B (4 items) + C (5 items) = 10 values total
-            # "Pozostałe wydatki" is the 5th item in C section, so it's at index 9 (0-based: 1+4+4)
-            if pozostale_label_index >= 0 and g_label_index >= 0:
-                # Get all values after G label and before payment section
-                all_values_after_g = []
-                for i in range(g_label_index + 1, payment_index):
-                    match = monetary_pattern.search(lines[i])
-                    if match:
-                        value = match.group(0).strip()
-                        all_values_after_g.append((i, value))
+
+            # Get all values after G label and before payment section
+            all_values_after_g = []
+            for i in range(g_label_index + 1, payment_index):
+                match = monetary_pattern.search(lines[i])
+                if match:
+                    value = match.group(0).strip()
+                    all_values_after_g.append((i, value))
                 
-                # "Pozostałe wydatki" is the 10th value (index 9): A(1) + B(4) + C before "Pozostałe"(4)
-                if len(all_values_after_g) > 9:
-                    pozostale_wydatki_value = all_values_after_g[9][1]
-        
+                # Value layout (0-indexed): A(0), B_total+4items(1-5), C_total(6), C_4items+pozostale(7-11)
+                # C. WYDATKI OGÓŁEM is at index 6
+                if len(all_values_after_g) > 6:
+                    c_wydatki_value = all_values_after_g[6][1]
+
+                # "Pozostałe wydatki" is at index 11: A(1) + B(5) + C_total(1) + C_items(4)
+                if len(all_values_after_g) > 11:
+                    pozostale_wydatki_value = all_values_after_g[11][1]
+
+        page_results["C_WYDATKI_OGOLEM"] = c_wydatki_value if c_wydatki_value else None
         page_results["E_PRZELEW_DO_WLASCICIELA"] = e_value if e_value else None
         page_results["F_WYDATKI_Z_SALDA"] = f_value if f_value else None
         page_results["POZOSTALE_WYDATKI"] = pozostale_wydatki_value if pozostale_wydatki_value else None
@@ -239,14 +241,16 @@ def main():
     
     page_2_e = format_for_formula(extracted_values.get("page_2", {}).get("E_PRZELEW_DO_WLASCICIELA", ""))
     page_3_e = format_for_formula(extracted_values.get("page_3", {}).get("E_PRZELEW_DO_WLASCICIELA", ""))
+    page_2_c = format_for_formula(extracted_values.get("page_2", {}).get("C_WYDATKI_OGOLEM", ""))
     page_2_pozostale = format_for_formula(extracted_values.get("page_2", {}).get("POZOSTALE_WYDATKI", ""))
     page_2_f = format_for_formula(extracted_values.get("page_2", {}).get("F_WYDATKI_Z_SALDA", ""))
+    page_3_c = format_for_formula(extracted_values.get("page_3", {}).get("C_WYDATKI_OGOLEM", ""))
     page_3_pozostale = format_for_formula(extracted_values.get("page_3", {}).get("POZOSTALE_WYDATKI", ""))
     page_3_f = format_for_formula(extracted_values.get("page_3", {}).get("F_WYDATKI_Z_SALDA", ""))
-    
+
     # Create the two formula rows
     row1 = f"={page_2_e}+{page_3_e}"
-    row2 = f"={page_2_pozostale}+{page_2_f}+{page_3_pozostale}+{page_3_f}"
+    row2 = f"={page_2_c}+{page_2_f}+{page_3_c}+{page_3_f}"
     
     # Write to file
     with open(formula_file, 'w', encoding='utf-8') as f:
