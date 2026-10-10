@@ -91,86 +91,30 @@ def extract_values_from_text(text, page_numbers=[2, 3]):
         page_key = f"page_{page_num}"
         page_results = {}
         
-        lines = page_text.split('\n')
-        
-        # Find G. SALDO NA KONIEC MIESIĄCA - values appear after this
-        g_label = "G. SALDO NA KONIEC MIESIĄCA"
-        g_label_index = -1
-        for i, line in enumerate(lines):
-            if g_label in line:
-                g_label_index = i
-                break
-        
-        e_value = None
-        f_value = None
-        pozostale_wydatki_value = None
-        c_wydatki_value = None
-        
-        # Find "Pozostałe wydatki z salda lokalu" value
-        pozostale_label = "Pozostałe wydatki z salda lokalu (np. naprawy, rozliczenia)"
-        pozostale_label_index = -1
-        for i, line in enumerate(lines):
-            if pozostale_label in line:
-                pozostale_label_index = i
-                break
+        # All monetary values before the utilities table, in document order:
+        # A(0) B(1-5) C(6-10) pozostale(11) D(12) E(13) F(14) F_sub(15) ?(16) G(17).
+        # Extra description lines (e.g. "(Usługa remontowa, ...)") contain no
+        # amounts, so the order is stable regardless of the values themselves.
+        payment_pos = page_text.find("Płatności z tyt. opłat eksploatacyjnych lokalu")
+        body = page_text if payment_pos < 0 else page_text[:payment_pos]
+        amount_pattern = re.compile(r'^\s*(\d{1,3}(?:[ \u00a0]\d{3})*,\d{2}\s*zł)\s*$', re.M)
+        values = amount_pattern.findall(body)
 
-        if g_label_index >= 0:
-            # Find payment section marker
-            payment_marker = "Płatności z tyt"
-            payment_index = len(lines)
-            for i in range(g_label_index, len(lines)):
-                if payment_marker in lines[i]:
-                    payment_index = i
-                    break
+        c_wydatki_value = e_value = f_value = pozostale_wydatki_value = None
+        if len(values) == 18:
+            c_wydatki_value = values[6]
+            pozostale_wydatki_value = values[11]
+            e_value = values[13]
+            f_value = values[14]
 
-            # Find all "1 000,00 zł" values after G label and before payment section
-            saldo_values = []
-            for i in range(g_label_index + 1, payment_index):
-                if "1 000,00 zł" in lines[i]:
-                    saldo_values.append(i)
+            def num(v):
+                return float(v.replace("zł", "").replace(" ", "").replace("\xa0", "").replace(",", "."))
 
-            # The last "1 000,00 zł" before payment is G (saldo na koniec miesiąca)
-            # The one before that is D (saldo minimalne)
-            if len(saldo_values) >= 2:
-                # Second-to-last "1 000,00 zł" is D (saldo minimalne)
-                saldo_minimalne_line = saldo_values[-2]
-
-                # Find all monetary values after saldo minimalne
-                values_after_d = []
-                for i in range(saldo_minimalne_line + 1, payment_index):
-                    match = monetary_pattern.search(lines[i])
-                    if match:
-                        value = match.group(0).strip()
-                        if value != "0,00 zł":  # Skip zero values
-                            values_after_d.append((i, value))
-                            # Stop after finding E and F (we only need first 2 non-zero values)
-                            if len(values_after_d) >= 2:
-                                break
-
-                # E value is the first non-zero value after D
-                if len(values_after_d) >= 1:
-                    e_value = values_after_d[0][1]
-
-                # F value is the second non-zero value after D
-                if len(values_after_d) >= 2:
-                    f_value = values_after_d[1][1]
-
-            # Get all values after G label and before payment section
-            all_values_after_g = []
-            for i in range(g_label_index + 1, payment_index):
-                match = monetary_pattern.search(lines[i])
-                if match:
-                    value = match.group(0).strip()
-                    all_values_after_g.append((i, value))
-                
-                # Value layout (0-indexed): A(0), B_total+4items(1-5), C_total(6), C_4items+pozostale(7-11)
-                # C. WYDATKI OGÓŁEM is at index 6
-                if len(all_values_after_g) > 6:
-                    c_wydatki_value = all_values_after_g[6][1]
-
-                # "Pozostałe wydatki" is at index 11: A(1) + B(5) + C_total(1) + C_items(4)
-                if len(all_values_after_g) > 11:
-                    pozostale_wydatki_value = all_values_after_g[11][1]
+            a_, b_, c_, e_, f_, g_ = (num(values[i]) for i in (0, 1, 6, 13, 14, 17))
+            if abs(a_ + b_ - c_ - e_ - f_ - g_) > 0.005:
+                print(f"WARNING: {page_key}: A+B-C-E-F != G, check values", file=sys.stderr)
+        else:
+            print(f"WARNING: {page_key}: expected 18 amounts, found {len(values)}", file=sys.stderr)
 
         page_results["C_WYDATKI_OGOLEM"] = c_wydatki_value if c_wydatki_value else None
         page_results["E_PRZELEW_DO_WLASCICIELA"] = e_value if e_value else None
